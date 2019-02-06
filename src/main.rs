@@ -115,7 +115,7 @@ fn check_cve_item(item: &CVEItem, product: &str) -> bool {
     for vendor_data in vendor_data_list {
         for product_data in &vendor_data.product.product_data {
             let product_name = &product_data.product_name;
-            if product_name == product {
+            if product_name.to_lowercase() == product.to_lowercase() {
                 return true;
             }
         }
