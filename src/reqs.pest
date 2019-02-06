@@ -1,0 +1,5 @@
+name = { (ASCII_ALPHA | "-")+ }
+version = { ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+
+req = { name ~ "==" ~ version }
+req_list = { req ~ (NEWLINE ~ req)+ }

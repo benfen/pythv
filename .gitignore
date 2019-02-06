@@ -1,0 +1,8 @@
+**/*.rs.bk
+/cve-data
+
+/target/*
+!/target/release
+
+/target/release/*
+!/target/release/pythv

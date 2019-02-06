@@ -1,0 +1,13 @@
+[package]
+name = "pythv"
+version = "0.1.0"
+authors = ["Ben <benfenny@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+pest = "2.1.0"
+pest_derive = "2.1.0"
+structopt = "0.2"
+serde_derive = "1.0.87"
+serde = "1.0.87"
+serde_json = "1.0.38"
