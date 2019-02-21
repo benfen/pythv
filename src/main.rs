@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use pest::Parser;
 use structopt::{StructOpt};
+use version_compare::{Version};
 
 #[derive(Parser)]
 #[grammar = "reqs.pest"]
@@ -21,13 +22,13 @@ struct Opts {
     pub file: PathBuf
 }
 
-#[derive(Debug, Clone)]
-struct Requirement {
+struct Requirement<'a> {
     pub name: String,
-    pub version: String,
+    pub version: Version<'a>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[allow(non_snake_case)]
 struct CVEDataMeta {
     ID: String
 }
@@ -49,14 +50,14 @@ struct VersionData {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct Version {
+struct ParsedVersion {
     version_data: Vec<VersionData>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ProductData {
     product_name: String,
-    version: Version,
+    version: ParsedVersion,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -81,17 +82,20 @@ struct Affects {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[allow(non_snake_case)]
 struct ImpactMetrics {
     severity: String,
     exploitabilityScore: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[allow(non_snake_case)]
 struct Impact {
     baseMetricV2: Option<ImpactMetrics>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[allow(non_snake_case)]
 struct CVE {
     CVE_data_meta: CVEDataMeta,
     affects: Affects,
@@ -105,18 +109,41 @@ struct CVEItem {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[allow(non_snake_case)]
 struct CVEData {
     CVE_Items: Vec<CVEItem>,
 }
 
-fn check_cve_item(item: &CVEItem, product: &str) -> bool {
+fn check_cve_item(item: &CVEItem, product: &Requirement) -> bool {
     let vendor_data_list = &item.cve.affects.vendor.vendor_data;
 
     for vendor_data in vendor_data_list {
         for product_data in &vendor_data.product.product_data {
             let product_name = &product_data.product_name;
-            if product_name.to_lowercase() == product.to_lowercase() {
-                return true;
+            // println!("{} {}", product_name.to_lowercase(), product.to_lowercase());
+            if product_name.to_lowercase() == product.name {
+                    println!("{:?}\n", product_data);
+                return product_data.version.version_data.iter().fold(false, |acc, version_data| {
+                    if version_data.version_value == "*" {
+                        return true;
+                    }
+
+                    let product_version = Version::from(&version_data.version_value)
+                        .expect("Failed to parse version from CVE");
+
+                    acc || match version_data.version_affected.as_ref() {
+                        "=" => {
+                            product.version == product_version
+                        },
+                        ">=" => {
+                            product.version >= product_version
+                        },
+                        "<=" => {
+                            product.version <= product_version
+                        },
+                        _ => unreachable!()
+                    }
+                });
             }
         }
     }
@@ -124,13 +151,13 @@ fn check_cve_item(item: &CVEItem, product: &str) -> bool {
     false
 }
 
-fn scan_deps(reqs: &[Requirement], cve_years: &[CVEData]) -> Vec<(Requirement, String)> {
+fn scan_deps<'a, 'b>(reqs: &'a[Requirement], cve_years: &'b[CVEData]) -> Vec<(&'a Requirement<'a>, String)> {
     let mut findings = Vec::new();
 
     for req in reqs {
         for cve_year in cve_years {
             for cve_item in &cve_year.CVE_Items {
-                if check_cve_item(&cve_item, &req.name) {
+                if check_cve_item(&cve_item, &req) {
                     findings.push((req.clone(), cve_item.cve.CVE_data_meta.ID.clone()));
                 }
             }
@@ -149,7 +176,10 @@ fn main() {
     for req_list in reqs {
         for pair in req_list.into_inner() {
             let vec: Vec<_> = pair.into_inner().flatten().collect();
-            requirements.push(Requirement{ name: vec[0].as_str().to_string(), version: vec[1].as_str().to_string()});
+            requirements.push(Requirement{
+                name: vec[0].as_str().to_string().to_lowercase(),
+                version: Version::from(vec[1].as_str()).expect("Failed to parse req from requirements.txt")
+            });
         }
     }
 
@@ -161,5 +191,7 @@ fn main() {
         cve_data.push(data);
     }
 
-    println!("{:?}", scan_deps(&requirements, &cve_data));
+    scan_deps(&requirements, &cve_data).iter().for_each(|finding| {
+        println!("{}: {}", finding.0.name, finding.1);
+    });
 }
