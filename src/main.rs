@@ -5,6 +5,7 @@ extern crate serde_derive;
 
 use std::fs;
 use std::path::PathBuf;
+use std::cmp::Ordering;
 
 use pest::Parser;
 use structopt::{StructOpt};
@@ -25,6 +26,12 @@ struct Opts {
 struct Requirement<'a> {
     pub name: String,
     pub version: Version<'a>,
+}
+
+struct Vulnerability<'a> {
+    pub name: String,
+    pub id: &'a str,
+    pub version_data: &'a [VersionData]
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -114,59 +121,6 @@ struct CVEData {
     CVE_Items: Vec<CVEItem>,
 }
 
-fn check_cve_item(item: &CVEItem, product: &Requirement) -> bool {
-    let vendor_data_list = &item.cve.affects.vendor.vendor_data;
-
-    for vendor_data in vendor_data_list {
-        for product_data in &vendor_data.product.product_data {
-            let product_name = &product_data.product_name;
-            // println!("{} {}", product_name.to_lowercase(), product.to_lowercase());
-            if product_name.to_lowercase() == product.name {
-                    println!("{:?}\n", product_data);
-                return product_data.version.version_data.iter().fold(false, |acc, version_data| {
-                    if version_data.version_value == "*" {
-                        return true;
-                    }
-
-                    let product_version = Version::from(&version_data.version_value)
-                        .expect("Failed to parse version from CVE");
-
-                    acc || match version_data.version_affected.as_ref() {
-                        "=" => {
-                            product.version == product_version
-                        },
-                        ">=" => {
-                            product.version >= product_version
-                        },
-                        "<=" => {
-                            product.version <= product_version
-                        },
-                        _ => unreachable!()
-                    }
-                });
-            }
-        }
-    }
-
-    false
-}
-
-fn scan_deps<'a, 'b>(reqs: &'a[Requirement], cve_years: &'b[CVEData]) -> Vec<(&'a Requirement<'a>, String)> {
-    let mut findings = Vec::new();
-
-    for req in reqs {
-        for cve_year in cve_years {
-            for cve_item in &cve_year.CVE_Items {
-                if check_cve_item(&cve_item, &req) {
-                    findings.push((req.clone(), cve_item.cve.CVE_data_meta.ID.clone()));
-                }
-            }
-        }
-    }
-
-    findings
-}
-
 fn main() {
     let opt = Opts::from_args();
     let contents = fs::read_to_string(opt.file).unwrap();
@@ -182,16 +136,77 @@ fn main() {
             });
         }
     }
+    requirements.sort_by(|a, b| a.name.cmp(&b.name));
 
     let mut cve_data = Vec::new();
     for year in 2002..=2019 {
         let body = fs::read_to_string(format!("cve-data/nvdcve-1.0-{}.json", year)).unwrap();
         println!("Loaded CVE data from {}", year);
         let data: CVEData = serde_json::from_str(&body).unwrap();
-        cve_data.push(data);
+        cve_data.extend(data.CVE_Items);
     }
 
-    scan_deps(&requirements, &cve_data).iter().for_each(|finding| {
-        println!("{}: {}", finding.0.name, finding.1);
+    let mut vulnerability_data = Vec::new();
+    for cve_item in &cve_data {
+        for vendor_data in &cve_item.cve.affects.vendor.vendor_data {
+            for product_data in &vendor_data.product.product_data {
+                vulnerability_data.push(Vulnerability {
+                    name: product_data.product_name.to_lowercase(),
+                    id: &cve_item.cve.CVE_data_meta.ID,
+                    version_data: &product_data.version.version_data
+                });
+            }
+        }
+    }
+    vulnerability_data.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut vulernabilities = Vec::new();
+    let mut req_index = 0;
+    let mut vul_index = 0;
+    while req_index < requirements.len() && vul_index < vulnerability_data.len() {
+        let req = &requirements[req_index];
+        let vulnerability = &vulnerability_data[vul_index];
+
+        match req.name.cmp(&vulnerability.name) {
+            Ordering::Greater => {
+                vul_index += 1;
+            },
+            Ordering::Less => {
+                req_index += 1;
+            },
+            Ordering::Equal => {
+                let flag = vulnerability.version_data.iter().fold(false, |acc, version_data| {
+                    if version_data.version_value == "*" {
+                        return true;
+                    }
+
+                    let product_version = Version::from(&version_data.version_value)
+                        .expect("Failed to parse version from CVE");
+
+                    acc || match version_data.version_affected.as_ref() {
+                        "=" => {
+                            req.version == product_version
+                        },
+                        ">=" => {
+                            req.version >= product_version
+                        },
+                        "<=" => {
+                            req.version <= product_version
+                        },
+                        _ => unreachable!()
+                    }
+                });
+
+                if flag {
+                    vulernabilities.push((&req.name, vulnerability.id));
+                }
+
+                vul_index += 1;
+            }
+        }
+    }
+
+    vulernabilities.iter().for_each(|vul| {
+        println!("{} {}", vul.0, vul.1);
     });
 }
