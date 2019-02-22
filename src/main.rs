@@ -8,6 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use pest::Parser;
+use pest::error::Error;
 use structopt::{StructOpt};
 use version_compare::{Version};
 
@@ -120,8 +121,8 @@ struct CVEData {
     CVE_Items: Vec<CVEItem>,
 }
 
-fn parse_requirements<'a>(contents: &'a str) -> Vec<Requirement<'a>> {
-    let reqs = ReqsParser::parse(Rule::req_list, &contents).unwrap();
+fn parse_requirements<'a>(contents: &'a str) -> Result<Vec<Requirement<'a>>, Error<Rule>> {
+    let reqs = ReqsParser::parse(Rule::req_list, &contents)?;
     let mut requirements = Vec::new();
 
     for req_list in reqs {
@@ -129,13 +130,12 @@ fn parse_requirements<'a>(contents: &'a str) -> Vec<Requirement<'a>> {
             let vec: Vec<_> = pair.into_inner().flatten().collect();
             requirements.push(Requirement{
                 name: vec[0].as_str().to_string().to_lowercase(),
-                version: Version::from(vec[1].as_str()).expect("Failed to parse req from requirements.txt")
+                version: Version::from(vec[1].as_str()).unwrap()
             });
         }
     }
-    requirements.sort_by(|a, b| a.name.cmp(&b.name));
 
-    requirements
+    Ok(requirements)
 }
 
 fn parse_vulernabilities(cve_data: &[CVEItem]) -> HashMap<String, Vec<Vulnerability>> {
@@ -192,7 +192,7 @@ fn main() {
     let opt = Opts::from_args();
     let contents = fs::read_to_string(opt.file).unwrap();
 
-    let requirements = parse_requirements(&contents);
+    let requirements = parse_requirements(&contents).expect("Failed to parse requirements");
 
     let mut cve_data = Vec::new();
     for year in 2002..=2019 {
@@ -219,4 +219,53 @@ fn main() {
     vulnerabilities.iter().for_each(|vul| {
         println!("{} {}", vul.0, vul.1);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_empty_requirements() {
+        let reqs = "";
+
+        let result = parse_requirements(&reqs).unwrap();
+        assert_eq!(0, result.len());
+    }
+
+    #[test]
+    fn test_parse_partial_versions() {
+        let reqs = "a==1.2.3
+b==1.2";
+
+        let result = parse_requirements(&reqs).unwrap();
+        assert_eq!(2, result.len());
+        assert_eq!("a", result[0].name);
+        assert_eq!(3, result[0].version.part_count());
+        assert_eq!("b", result[1].name);
+        assert_eq!(2, result[1].version.part_count());
+    }
+
+    #[test]
+    fn test_parse_vulnerabilities() {
+        let body = fs::read_to_string("./test-data.json").unwrap();
+        let data: CVEData = serde_json::from_str(&body).unwrap();
+
+        let vulnerabilities = parse_vulernabilities(&data.CVE_Items);
+        assert_eq!(1, vulnerabilities.len());
+        assert_eq!("CVE-2018-16516", vulnerabilities.get("flask-admin").unwrap()[0].id);
+    }
+
+    #[test]
+    fn test_check_version_match() {
+        let body = fs::read_to_string("./test-data.json").unwrap();
+        let data: CVEData = serde_json::from_str(&body).unwrap();
+
+        let vulnerabilities = parse_vulernabilities(&data.CVE_Items);
+        let req = Requirement {
+            name: "flask-admin".to_string(),
+            version: Version::from("1.5.2").unwrap()
+        };
+        assert!(check_version_match(&vulnerabilities.get("flask-admin").unwrap()[0], &req));
+    }
 }
