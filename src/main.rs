@@ -3,7 +3,7 @@ extern crate pest_derive;
 #[macro_use]
 extern crate serde_derive;
 
-use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -29,7 +29,6 @@ struct Requirement<'a> {
 }
 
 struct Vulnerability<'a> {
-    pub name: String,
     pub id: &'a str,
     pub version_data: &'a [VersionData]
 }
@@ -139,20 +138,26 @@ fn parse_requirements<'a>(contents: &'a str) -> Vec<Requirement<'a>> {
     requirements
 }
 
-fn parse_vulernabilities<'a>(cve_data: &'a [CVEItem]) -> Vec<Vulnerability<'a>> {
-    let mut vulnerability_data = Vec::new();
+fn parse_vulernabilities(cve_data: &[CVEItem]) -> HashMap<String, Vec<Vulnerability>> {
+    let mut vulnerability_data: HashMap<String, Vec<Vulnerability>> = HashMap::new();
+
     for cve_item in cve_data {
         for vendor_data in &cve_item.cve.affects.vendor.vendor_data {
             for product_data in &vendor_data.product.product_data {
-                vulnerability_data.push(Vulnerability {
-                    name: product_data.product_name.to_lowercase(),
+                let name = product_data.product_name.to_lowercase();
+                let vulnerability = Vulnerability {
                     id: &cve_item.cve.CVE_data_meta.ID,
                     version_data: &product_data.version.version_data
-                });
+                };
+                if vulnerability_data.contains_key(&name) {
+                    let data = vulnerability_data.get_mut(&name).unwrap();
+                    data.push(vulnerability);
+                } else {
+                    vulnerability_data.insert(name, vec!(vulnerability));
+                }
             }
         }
     }
-    vulnerability_data.sort_by(|a, b| a.name.cmp(&b.name));
 
     vulnerability_data
 }
@@ -199,32 +204,19 @@ fn main() {
 
     let vulnerability_data = parse_vulernabilities(&cve_data);
 
-    let mut vulernabilities = Vec::new();
-    let mut req_index = 0;
-    let mut vul_index = 0;
-    while req_index < requirements.len() && vul_index < vulnerability_data.len() {
-        let req = &requirements[req_index];
-        let vulnerability = &vulnerability_data[vul_index];
-
-        match req.name.cmp(&vulnerability.name) {
-            Ordering::Greater => {
-                vul_index += 1;
-            },
-            Ordering::Less => {
-                req_index += 1;
-            },
-            Ordering::Equal => {
-                if check_version_match(vulnerability, req) {
-                    vulernabilities.push((&req.name, vulnerability.id));
+    let mut vulnerabilities = Vec::new();
+    for req in &requirements {
+        if let Some(vuln_list) = vulnerability_data.get(&req.name) {
+            for vulnerability in vuln_list {
+                if check_version_match(&vulnerability, &req) {
+                    vulnerabilities.push((&req.name, vulnerability.id));
                 }
-
-                vul_index += 1;
             }
         }
     }
 
     println!("");
-    vulernabilities.iter().for_each(|vul| {
+    vulnerabilities.iter().for_each(|vul| {
         println!("{} {}", vul.0, vul.1);
     });
 }
