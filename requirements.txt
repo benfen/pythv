@@ -10,7 +10,7 @@ flask-swagger==0.2.13
 nameko==2.11.0
 py==1.7.0
 pycparser==2.19
-Pygments==2.2.0
+Pygments==2.7.4
 pylint==2.1.1
 pytest==3.7.3
 PyYAML==5.1
